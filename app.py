@@ -1,24 +1,31 @@
 import streamlit as st
 import pandas as pd
+import streamlit as st
 from openai import OpenAI
+import gspread
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-import gspread
+import json
 
-# --- Secretsから秘密情報を取得 ---
-# Streamlit Cloudの設定画面で入力した値を使います
+# --- 1. 設定 & 認証 ---
+# Secretsから情報を取得
 api_key = st.secrets["OPENAI_API_KEY"]
-google_credentials = st.secrets["gcp_service_account"]
 
-# --- 各種クライアントの初期化 ---
+# 👇 ここからが裏技（辞書に変換して、無理やり改行コードを本物の改行に置換する）
+gcp_info = dict(st.secrets["gcp_service_account"])
+gcp_info["private_key"] = gcp_info["private_key"].replace("\\n", "\n")
+# 👆 ここまで
+
+# OpenAIクライアント
 client = OpenAI(api_key=api_key)
-creds = service_account.Credentials.from_service_account_info(google_credentials)
-scoped_creds = creds.with_scopes([
+
+scopes = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
-])
-gc = gspread.authorize(scoped_creds)
-drive_service = build('drive', 'v3', credentials=scoped_creds)
+]
+creds = service_account.Credentials.from_service_account_info(gcp_info, scopes=scopes)
+gc = gspread.authorize(creds)
+# ...以降は元のまま
 
 # --- スプレッドシート操作用の関数 ---
 def save_log_to_sheets(data):
