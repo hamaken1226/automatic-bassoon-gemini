@@ -2,31 +2,30 @@ import streamlit as st
 from openai import OpenAI
 import gspread
 from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from google.cloud import storage
 import io
 import json
 from datetime import datetime
 from streamlit_mic_recorder import mic_recorder
 
-# --- 1. 認証設定（この部分はもう完璧に動いています！） ---
+# --- 1. 認証設定（ここは変更なし！今の鍵がそのまま使えます） ---
 api_key = st.secrets["OPENAI_API_KEY"]
 gcp_info = dict(st.secrets["gcp_service_account"])
 gcp_info["private_key"] = gcp_info["private_key"].replace("\\n", "\n")
 
 client = OpenAI(api_key=api_key)
 
-scopes = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
+# スプレッドシート用の認証
+scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 creds = service_account.Credentials.from_service_account_info(gcp_info, scopes=scopes)
 gc = gspread.authorize(creds)
-drive_service = build('drive', 'v3', credentials=creds)
 
-# --- 2. 保存先の設定（★ここを自分のものに変更してください） ---
+# Cloud Storage用の認証
+storage_client = storage.Client(credentials=creds, project=gcp_info["project_id"])
+
+# --- 2. 保存先の設定（★ここを変更してください） ---
 SHEET_NAME = "English_AI_Logs" # スプレッドシートの名前
-DRIVE_FOLDER_ID = "1Adz8cVZq6tjZiPY7NJhocPkghq5bQMCI"
+BUCKET_NAME = "hamaguchi-thesis-audio" # 例: "hamaguchi-thesis-audio"
 
 # --- 3. アプリの設定 ---
 st.set_page_config(page_title="English Level Checker", layout="centered")
@@ -83,9 +82,9 @@ if st.session_state.step < len(QUESTIONS):
             with st.spinner("音声を処理・保存中..."):
                 timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                 file_name = f"{user_id}_Q{st.session_state.step+1}_{timestamp.replace('/','').replace(':','').replace(' ','_')}.wav"
+                audio_bytes = audio_data['bytes']
                 
                 # ① OpenAIで文字起こし
-                audio_bytes = audio_data['bytes']
                 with io.BytesIO(audio_bytes) as audio_file:
                     audio_file.name = "audio.wav"
                     transcript = client.audio.transcriptions.create(
@@ -93,10 +92,11 @@ if st.session_state.step < len(QUESTIONS):
                         file=audio_file
                     )
                 
-                # ② Googleドライブに音声をアップロード
-                file_metadata = {'name': file_name, 'parents': [DRIVE_FOLDER_ID]}
-                media = MediaIoBaseUpload(io.BytesIO(audio_bytes), mimetype='audio/wav', resumable=True)
-                drive_service.files().create(body=file_metadata, media_body=media, fields='id', supportsAllDrives=True).execute()
+                # ② Google Cloud Storageに音声をアップロード (★ここが変わりました！)
+                bucket = storage_client.bucket(BUCKET_NAME)
+                blob = bucket.blob(file_name)
+                blob.upload_from_string(audio_bytes, content_type='audio/wav')
+
                 # ③ スプレッドシートに記録
                 sheet = gc.open(SHEET_NAME).sheet1
                 sheet.append_row([timestamp, user_id, st.session_state.step + 1, current_q['q'], transcript.text])
@@ -136,7 +136,6 @@ else:
         final_report = response.choices[0].message.content
         st.markdown(final_report)
         
-        # 最終結果もスプレッドシートに保存
         timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
         sheet = gc.open(SHEET_NAME).sheet1
         sheet.append_row([timestamp, user_id, "FINAL", "総合診断レポート", final_report])
