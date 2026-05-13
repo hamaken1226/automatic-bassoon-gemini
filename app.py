@@ -116,9 +116,9 @@ if st.session_state.step < len(QUESTIONS):
         st.success(f"回答を記録しました： {st.session_state.results[st.session_state.step]['answer']}")
         st.button("次の問題へ進む ➡️", on_click=move_to_next)
 
-current_q = QUESTIONS[st.session_state.step]
+    current_q = QUESTIONS[st.session_state.step]
 
-st.subheader(f"第 {st.session_state.step + 1} 問 / {len(QUESTIONS)}")
+    st.subheader(f"第 {st.session_state.step + 1} 問 / {len(QUESTIONS)}")
 
 # --- 6. 最終診断 ---
 else:
