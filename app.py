@@ -96,7 +96,7 @@ if st.session_state.step < len(QUESTIONS):
                 # ② Googleドライブに音声をアップロード
                 file_metadata = {'name': file_name, 'parents': [DRIVE_FOLDER_ID]}
                 media = MediaIoBaseUpload(io.BytesIO(audio_bytes), mimetype='audio/wav', resumable=True)
-              　drive_service.files().create(body=file_metadata, media_body=media, fields='id', supportsAllDrives=True).execute()
+              　drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
                 # ③ スプレッドシートに記録
                 sheet = gc.open(SHEET_NAME).sheet1
                 sheet.append_row([timestamp, user_id, st.session_state.step + 1, current_q['q'], transcript.text])
