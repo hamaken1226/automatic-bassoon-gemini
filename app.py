@@ -112,10 +112,10 @@ if st.session_state.step < len(QUESTIONS):
 
 current_q = QUESTIONS[st.session_state.step]
     
-    # ⬇️⬇️⬇️ これを追加 ⬇️⬇️⬇️
-    st.info(f"🗝️ 現在のAIアドレス: {gcp_info['client_email']}")
-    st.info(f"🏢 現在のプロジェクト: {gcp_info['project_id']}")
-    # ⬆️⬆️⬆️ これを追加 ⬆️⬆️⬆️
+# ⬇️⬇️⬇️ これを追加 ⬇️⬇️⬇️
+st.info(f"🗝️ 現在のAIアドレス: {gcp_info['client_email']}")
+st.info(f"🏢 現在のプロジェクト: {gcp_info['project_id']}")
+# ⬆️⬆️⬆️ これを追加 ⬆️⬆️⬆️
 
     st.subheader(f"第 {st.session_state.step + 1} 問 / {len(QUESTIONS)}")
 
