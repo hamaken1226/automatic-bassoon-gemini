@@ -35,11 +35,12 @@ BUCKET_NAME = "kentaengspeakingtest202605131619" # 例: "hamaguchi-thesis-audio"
 st.set_page_config(page_title="English Level Checker", layout="centered")
 st.title("🎓 英語レベル・化石化診断テスト")
 
-# 状態管理の初期化（attempt という「録音回数カウンター」を追加します）
 if 'step' not in st.session_state:
     st.session_state.step = 0
+if 'results' not in st.session_state:
     st.session_state.results = []
-    st.session_state.attempt = 0 
+if 'attempt' not in st.session_state:
+    st.session_state.attempt = 0
 
 # サイドバー設定
 with st.sidebar:
