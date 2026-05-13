@@ -64,7 +64,15 @@ QUESTIONS = [
 # --- 5. メインロジック ---
 if st.session_state.step < len(QUESTIONS):
     current_q = QUESTIONS[st.session_state.step]
+    
+    # ここからデバッグ表示
+    st.info(f"🗝️ 現在のAIアドレス: {gcp_info['client_email']}")
+    st.info(f"🏢 現在のプロジェクト: {gcp_info['project_id']}")
+    # ここまで
+
     st.subheader(f"第 {st.session_state.step + 1} 問 / {len(QUESTIONS)}")
+    
+    if current_q["type"] == "TRANS":
     
     if current_q["type"] == "TRANS":
         st.warning(f"**指定フレーズを英語に直してください：**\n\n {current_q['q']}")
@@ -111,11 +119,6 @@ if st.session_state.step < len(QUESTIONS):
         st.button("次の問題へ進む ➡️", on_click=move_to_next)
 
 current_q = QUESTIONS[st.session_state.step]
-    
-# ⬇️⬇️⬇️ これを追加 ⬇️⬇️⬇️
-st.info(f"🗝️ 現在のAIアドレス: {gcp_info['client_email']}")
-st.info(f"🏢 現在のプロジェクト: {gcp_info['project_id']}")
-# ⬆️⬆️⬆️ これを追加 ⬆️⬆️⬆️
 
     st.subheader(f"第 {st.session_state.step + 1} 問 / {len(QUESTIONS)}")
 
