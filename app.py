@@ -25,7 +25,7 @@ storage_client = storage.Client(credentials=creds, project=gcp_info["project_id"
 
 # --- 2. 保存先の設定（★ここを変更してください） ---
 SHEET_NAME = "English_AI_Logs" # スプレッドシートの名前
-BUCKET_NAME = "hamaguchi-thesis-audio" # 例: "hamaguchi-thesis-audio"
+BUCKET_NAME = "kentaengspeakingtest202605131619" # 例: "hamaguchi-thesis-audio"
 
 # --- 3. アプリの設定 ---
 st.set_page_config(page_title="English Level Checker", layout="centered")
