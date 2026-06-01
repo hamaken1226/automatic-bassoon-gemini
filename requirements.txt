@@ -1,8 +1,8 @@
 streamlit
+audio-recorder-streamlit
 openai
-streamlit-mic-recorder
+google-cloud-storage
 gspread
 google-auth
-google-api-python-client
 pandas
-google-cloud-storage
+plotly
