@@ -141,31 +141,99 @@ if st.session_state.step < len(QUESTIONS):
 # --- 6. 最終診断 ---
 else:
     st.subheader("🏁 全10問完了！総合診断中...")
-    with st.spinner("AI先生が全ての回答を分析しています..."):
+    with st.spinner("AI先生が全ての回答を分析し、グラフを生成しています..."):
         summary_text = ""
         for i, res in enumerate(st.session_state.results):
             summary_text += f"Q{i+1}: {res['question']}\n回答: {res['answer']}\n\n"
 
+        # AIにJSON形式で返答させるためのプロンプト
         analysis_prompt = """
-        あなたは英語教育の専門家です。10問の回答データを基に、詳細な英語能力診断を行ってください。
-        
-        【出力フォーマット】
-        ## 📊 総合診断レポート
-        ### 🌟 推定レベル: [CEFRレベル]
-        ### 🚨 検出された「化石化」の兆候
-        ### 👩‍🏫 今後の学習アドバイス
+        あなたは第二言語習得（SLA）の専門家およびデータアナリストです。
+        提供された発話データを分析し、以下のJSONスキーマに厳密に従ってデータを出力してください。
+        （※Markdownなどの装飾は一切含めず、純粋なJSONオブジェクトのみを出力すること）
+
+        【分析の4観点】
+        1. 時制（Tense）
+        2. 主語と動詞の一致（Agreement）
+        3. 名詞の境界（Nouns & Articles）
+        4. 構文・語順（Syntax）
+
+        【計算ルール】
+        - エラー率(%) = (エラー数 / 必須文脈数) × 100
+        - 全体平均エラー率(%) = (全エラー数合計 / 全必須文脈数合計) × 100
+        - 化石化判定（is_fossilized）: 全体平均エラー率が40%以下、かつ、その観点のエラー率が全体平均より30%以上高い場合に true とすること。
+
+        【出力JSONフォーマット】
+        {
+            "overall_summary": "学習者のスピーキング傾向についての総評（2〜3文）",
+            "overall_average_error_rate": 25.5,
+            "categories": [
+                {
+                    "name": "時制",
+                    "obligatory_contexts": 10,
+                    "error_count": 2,
+                    "error_rate": 20.0,
+                    "is_fossilized": false,
+                    "details": "エラーの具体例（元の発話の引用）と分析"
+                }
+            ],
+            "advice": "今後の学習アドバイス"
+        }
         """
 
+        # GPT-4o APIの呼び出し（JSONモードを有効化）
         response = client.chat.completions.create(
             model="gpt-4o",
+            response_format={ "type": "json_object" },
             messages=[{"role": "system", "content": analysis_prompt}, {"role": "user", "content": summary_text}],
             temperature=0
         )
-        final_report = response.choices[0].message.content
-        st.markdown(final_report)
         
+        # JSONデータをPythonの辞書に変換
+        result_data = json.loads(response.choices[0].message.content)
+
+        # ---------------------------------------------------------
+        # 画面への描画（UI構築）
+        # ---------------------------------------------------------
+        st.success("分析が完了しました！")
+        st.markdown(f"### 📊 全体総評\n{result_data['overall_summary']}")
+        st.info(f"**全体平均エラー率: {result_data['overall_average_error_rate']}%**")
+
+        # データをPandasのデータフレームに変換してグラフ化
+        df = pd.DataFrame(result_data['categories'])
+
+        # グラフを2列に分けて表示
+        col_chart1, col_chart2 = st.columns(2)
+        
+        with col_chart1:
+            st.markdown("#### 🕸️ エラー率レーダーチャート")
+            fig_radar = px.line_polar(df, r='error_rate', theta='name', line_close=True, range_r=[0, 100])
+            fig_radar.update_traces(fill='toself', line_color='#FF4B4B')
+            st.plotly_chart(fig_radar, use_container_width=True)
+
+        with col_chart2:
+            st.markdown("#### 📊 観点別エラー率（棒グラフ）")
+            fig_bar = px.bar(df, x='name', y='error_rate', color='is_fossilized',
+                             color_discrete_map={True: 'red', False: 'blue'},
+                             labels={'name': '観点', 'error_rate': 'エラー率 (%)', 'is_fossilized': '化石化の兆候'})
+            fig_bar.update_yaxes(range=[0, 100])
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+        # 各観点の詳細とアドバイスを表示
+        st.markdown("### 🚨 詳細分析")
+        for cat in result_data['categories']:
+            # 化石化フラグが立っていたら警告アイコンをつける
+            status_icon = "⚠️ **【化石化の兆候あり】**" if cat['is_fossilized'] else "✅"
+            st.markdown(f"#### {status_icon} {cat['name']} (エラー率: {cat['error_rate']}%)")
+            st.markdown(f"- 必須文脈数: {cat['obligatory_contexts']} / エラー数: {cat['error_count']}")
+            st.markdown(f"- **分析:** {cat['details']}")
+
+        st.markdown("---")
+        st.markdown(f"### 👩‍🏫 今後の学習アドバイス\n{result_data['advice']}")
+
+        # スプレッドシートに記録
         timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
         sheet = gc.open(SHEET_NAME).sheet1
-        sheet.append_row([timestamp, user_id, "FINAL", "総合診断レポート", final_report])
+        sheet.append_row([timestamp, user_id, "FINAL", "総合診断レポート", json.dumps(result_data, ensure_ascii=False)])
 
     st.balloons()
