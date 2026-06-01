@@ -1,6 +1,6 @@
 import streamlit as st
 from audio_recorder_streamlit import audio_recorder
-import openai
+from openai import OpenAI
 from google.cloud import storage
 import gspread
 from google.oauth2 import service_account
