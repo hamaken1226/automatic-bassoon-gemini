@@ -70,6 +70,56 @@ for rec in user_records:
 
 df = pd.DataFrame(flat_data)
 
+# --- 🌟 追加実装：総合CEFR判定 (Grammar & Accuracy) 🌟 ---
+st.markdown("---")
+st.markdown("### 🏆 総合CEFR判定 (Grammar & Accuracy)")
+
+# 1. 全テストの平均エラー率を算出
+overall_error_rate = df["エラー率"].mean()
+
+# 2. 化石化フラグが立った総回数をカウント
+total_fossilizations = df[df["化石化判定"] == True].shape[0]
+
+# 3. CEFRランクの判定ロジック（C1・C2追加版）
+if overall_error_rate <= 5 and total_fossilizations == 0:
+    cefr_level = "C2 (熟練者レベル)"
+    cefr_color = "#9C27B0" # Purple
+    cefr_desc = "驚異的な正確性です。母語話者と同等の文法コントロール力を持ち、いかなる負荷がかかっても化石化のエラーを起こしません。まさにマスターレベルです。"
+elif overall_error_rate <= 10 and total_fossilizations == 0:
+    cefr_level = "C1 (上級・プロフェッショナル)"
+    cefr_color = "#673AB7" # Deep Purple
+    cefr_desc = "極めて高い正確性を誇ります。化石化の兆候は完全に払拭されており、複雑な文章でも文法的なミスを犯すことはほぼありません。"
+elif overall_error_rate <= 15 and total_fossilizations <= 1:
+    cefr_level = "B2 (実務対応レベル)"
+    cefr_color = "#4CAF50" # Green
+    cefr_desc = "素晴らしい文法コントロール力です。母語の干渉（化石化）もほぼ脱却しており、ビジネス環境でも十分に通用する正確性を備えています。"
+elif overall_error_rate <= 30 and total_fossilizations <= 3:
+    cefr_level = "B1 (日常会話レベル)"
+    cefr_color = "#2196F3" # Blue
+    cefr_desc = "基礎的な文法は習得できていますが、認知的負荷がかかる自由発話では特定の化石化（L1干渉）が顔を出します。弱点を意識することでB2へ到達可能です。"
+elif overall_error_rate <= 50:
+    cefr_level = "A2 (基礎レベル)"
+    cefr_color = "#FF9800" # Orange
+    cefr_desc = "基本的な文章は構成できますが、時制や3単現など全体的にエラーが散見されます。特定の化石化を気にするより、全体的な文法ルールの定着が必要です。"
+else:
+    cefr_level = "A1 (初学者レベル)"
+    cefr_color = "#F44336" # Red
+    cefr_desc = "英語の語順や基礎的なルールにまだ慣れていない状態です。まずは短い文章を正確に作るトレーニングから始めましょう。"
+
+# 4. 画面に美しく描画
+st.markdown(
+    f"""
+    <div style="background-color: {cefr_color}20; padding: 20px; border-radius: 10px; border-left: 8px solid {cefr_color}; margin-bottom: 20px;">
+        <h2 style="margin: 0; color: {cefr_color};">推定レベル: {cefr_level}</h2>
+        <p style="margin-top: 10px; font-size: 16px;">
+            <b>分析データ:</b> 平均エラー率 {overall_error_rate:.1f}% / 化石化検知 {total_fossilizations}回<br>
+            <b>AI総評:</b> {cefr_desc}
+        </p>
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
+
 # --- 4. グラフの描画 ---
 col1, col2 = st.columns(2)
 
