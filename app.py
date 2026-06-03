@@ -1,5 +1,5 @@
 import streamlit as st
-from streamlit-mic-recorder import mic-recorder
+from streamlit_mic_recorder import mic_recorder
 from openai import OpenAI
 from google.cloud import storage
 import gspread
