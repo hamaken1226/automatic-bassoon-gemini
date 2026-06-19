@@ -18,7 +18,7 @@ creds = service_account.Credentials.from_service_account_info(gcp_info, scopes=s
 client_gspread = gspread.authorize(creds)
 
 # ※app.pyで設定したのと同じシート名にしてください
-SHEET_NAME = "English_AI_Logs" 
+SHEET_NAME = "English_AI_Logs_Gemini"
 
 # --- 2. データの取得と整形 ---
 try:

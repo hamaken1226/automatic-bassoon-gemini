@@ -1,6 +1,6 @@
 streamlit
 streamlit-mic-recorder
-openai
+google-genai
 google-cloud-storage
 gspread
 google-auth

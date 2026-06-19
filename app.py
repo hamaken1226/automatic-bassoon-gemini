@@ -1,22 +1,23 @@
 import streamlit as st
 from streamlit_mic_recorder import mic_recorder
-from openai import OpenAI
+from google import genai
+from google.genai import types
 from google.cloud import storage
 import gspread
 from google.oauth2 import service_account
 from datetime import datetime
-import io
+import time
 
 import json
 import pandas as pd
 import plotly.express as px
 
-# --- 1. 認証設定（ここは変更なし！今の鍵がそのまま使えます） ---
-api_key = st.secrets["OPENAI_API_KEY"]
+# --- 1. 認証設定 ---
+gemini_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+GEMINI_MODEL = "gemini-2.5-flash"  # 無料枠で安定して使えるモデル
+
 gcp_info = dict(st.secrets["gcp_service_account"])
 gcp_info["private_key"] = gcp_info["private_key"].replace("\\n", "\n")
-
-client = OpenAI(api_key=api_key)
 
 # スプレッドシート用の認証
 scopes = [
@@ -31,8 +32,24 @@ gc = gspread.authorize(creds)
 storage_client = storage.Client(credentials=creds, project=gcp_info["project_id"])
 
 # --- 2. 保存先の設定（★ここを変更してください） ---
-SHEET_NAME = "English_AI_Logs" # スプレッドシートの名前
-BUCKET_NAME = "kentaengspeakingtest202605131619" # 例: "hamaguchi-thesis-audio"
+SHEET_NAME = "English_AI_Logs_Gemini" # スプレッドシートの名前（GPT版とはデータを分離）
+BUCKET_NAME = "kentaengspeakingtest-gemini-202606192210" # GPT版とはデータを分離するため別バケット
+
+
+# --- 2.5 Gemini呼び出しの共通ヘルパー（無料枠のレート制限429対策でリトライを入れる） ---
+def call_gemini(contents, config=None, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            return gemini_client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=contents,
+                config=config
+            )
+        except Exception:
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(2 ** attempt)  # 1秒, 2秒, 4秒...と間隔を空けて再試行
+
 
 # --- 3. アプリの設定 ---
 st.set_page_config(page_title="English Level Checker", layout="centered")
@@ -150,14 +167,20 @@ if st.session_state.step < len(QUESTIONS):
                 file_name = f"{user_id}_Q{st.session_state.step+1}_{timestamp.replace('/','').replace(':','').replace(' ','_')}.wav"
                 audio_bytes = audio_data['bytes']
                 
-                # ① OpenAIで文字起こし
-                with io.BytesIO(audio_bytes) as audio_file:
-                    audio_file.name = "audio.wav"
-                    transcript = client.audio.transcriptions.create(
-                        model="whisper-1", 
-                        file=audio_file
-                    )
-                
+                # ① Geminiで文字起こし（音声バイトを直接渡す）
+                transcribe_prompt = (
+                    "以下は英語学習者の発話音声です。発話された内容を一字一句そのまま書き起こしてください。"
+                    "文法的な誤りや言い淀み、言い直し、フィラー(um, uhなど)も一切修正・省略せず、聞こえた通りに書き起こすこと。"
+                    "出力は書き起こしテキストのみとし、前置きや説明は不要です。"
+                )
+                transcribe_response = call_gemini(
+                    contents=[
+                        transcribe_prompt,
+                        types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav")
+                    ]
+                )
+                transcript_text = transcribe_response.text.strip()
+
                 # ② Google Cloud Storageに音声をアップロード
                 bucket = storage_client.bucket(BUCKET_NAME)
                 blob = bucket.blob(file_name)
@@ -165,12 +188,12 @@ if st.session_state.step < len(QUESTIONS):
 
                 # ③ スプレッドシートに記録
                 sheet = gc.open(SHEET_NAME).sheet1
-                sheet.append_row([timestamp, user_id, st.session_state.step + 1, current_q['q'], transcript.text])
-                
+                sheet.append_row([timestamp, user_id, st.session_state.step + 1, current_q['q'], transcript_text])
+
                 st.session_state.results.append({
                     "question": current_q['q'],
                     "type": current_q['type'],
-                    "answer": transcript.text
+                    "answer": transcript_text
                 })
                 
                 # 次のステップへ進み、録音回数をリセット
@@ -192,6 +215,8 @@ else:
             summary_text += f"Q{i+1}: {res['question']}\n回答: {res['answer']}\n\n"
 
         # AIにJSON形式で返答させるためのプロンプト
+        # ★エラー率・全体平均・化石化判定の計算はAIにはやらせない（必須文脈数とエラー数の抽出のみ）。
+        #   計算はこの後Python側で必ず行う（AIに計算させると桁数ミスが起こるため）。
         analysis_prompt = """
         あなたは第二言語習得（SLA）の専門家およびデータアナリストです。
         提供された発話データを分析し、以下のJSONスキーマに厳密に従ってデータを出力してください。
@@ -203,46 +228,66 @@ else:
         3. 名詞の境界（Nouns & Articles）
         4. 構文・語順（Syntax）
 
-        【計算ルール】
-        - エラー率(%) = (エラー数 / 必須文脈数) × 100
-        - 全体平均エラー率(%) = (全エラー数合計 / 全必須文脈数合計) × 100
-        - 化石化判定（is_fossilized）: 全体平均エラー率が40%以下、かつ、その観点のエラー率が全体平均より30%以上高い場合に true とすること。
+        【重要】エラー率・全体平均エラー率・化石化判定の計算は一切行わないこと。
+        あなたが出力するのは、各観点の「必須文脈数」「エラー数」「具体例」のみ。
+        パーセンテージ等の計算はすべてこちら（Python側）で行う。
 
         【出力JSONフォーマット】
         {
             "overall_summary": "学習者のスピーキング傾向についての総評（2〜3文）",
-            "overall_average_error_rate": 25.5,
             "categories": [
                 {
                     "name": "時制",
                     "obligatory_contexts": 10,
                     "error_count": 2,
-                    "error_rate": 20.0,
-                    "is_fossilized": false,
                     "details": "エラーの具体例（元の発話の引用）と分析"
                 }
             ],
             "advice": "今後の学習アドバイス"
         }
-        """
 
-        # GPT-4o APIの呼び出し（JSONモードを有効化）
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            response_format={ "type": "json_object" },
-            messages=[{"role": "system", "content": analysis_prompt}, {"role": "user", "content": summary_text}],
-            temperature=0
+        【対象発話ログ】
+        """ + summary_text
+
+        # Gemini APIの呼び出し（response_mime_typeでJSON出力を強制）
+        response = call_gemini(
+            contents=analysis_prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.0,
+                response_mime_type="application/json"
+            )
         )
-        
+
+        result_json_str = response.text.strip()
+        # 念のためのフォールバック（Markdownコードブロックが混入した場合に剥がす）
+        if result_json_str.startswith("```json"):
+            result_json_str = result_json_str[7:]
+        if result_json_str.endswith("```"):
+            result_json_str = result_json_str[:-3]
+        result_json_str = result_json_str.strip()
+
         # JSONデータをPythonの辞書に変換
-        result_data = json.loads(response.choices[0].message.content)
+        result_data = json.loads(result_json_str)
+
+        # ★Python側でエラー率・全体平均エラー率・化石化判定を正確に計算する
+        total_errors = sum(cat["error_count"] for cat in result_data["categories"])
+        total_contexts = sum(cat["obligatory_contexts"] for cat in result_data["categories"])
+        overall_average_error_rate = (total_errors / total_contexts * 100) if total_contexts > 0 else 0
+
+        for cat in result_data["categories"]:
+            cat_rate = (cat["error_count"] / cat["obligatory_contexts"] * 100) if cat["obligatory_contexts"] > 0 else 0
+            cat["error_rate"] = cat_rate
+            # 化石化の定義：全体平均が40%以下 かつ その観点のエラー率が全体平均+30ポイント以上
+            cat["is_fossilized"] = bool(overall_average_error_rate <= 40.0 and cat_rate >= overall_average_error_rate + 30.0)
+
+        result_data["overall_average_error_rate"] = overall_average_error_rate
 
         # ---------------------------------------------------------
         # 画面への描画（UI構築）
         # ---------------------------------------------------------
         st.success("分析が完了しました！")
         st.markdown(f"### 📊 全体総評\n{result_data['overall_summary']}")
-        st.info(f"**全体平均エラー率: {result_data['overall_average_error_rate']}%**")
+        st.info(f"**全体平均エラー率: {result_data['overall_average_error_rate']:.1f}%**")
 
         # データをPandasのデータフレームに変換してグラフ化
         df = pd.DataFrame(result_data['categories'])
@@ -269,7 +314,7 @@ else:
         for cat in result_data['categories']:
             # 化石化フラグが立っていたら警告アイコンをつける
             status_icon = "⚠️ **【化石化の兆候あり】**" if cat['is_fossilized'] else "✅"
-            st.markdown(f"#### {status_icon} {cat['name']} (エラー率: {cat['error_rate']}%)")
+            st.markdown(f"#### {status_icon} {cat['name']} (エラー率: {cat['error_rate']:.1f}%)")
             st.markdown(f"- 必須文脈数: {cat['obligatory_contexts']} / エラー数: {cat['error_count']}")
             st.markdown(f"- **分析:** {cat['details']}")
 
