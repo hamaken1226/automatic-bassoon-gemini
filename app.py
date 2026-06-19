@@ -51,6 +51,14 @@ def call_gemini(contents, config=None, max_retries=3):
             time.sleep(2 ** attempt)  # 1秒, 2秒, 4秒...と間隔を空けて再試行
 
 
+# --- 2.6 被験者の認証情報をスプレッドシート（Testersタブ）から取得 ---
+@st.cache_data(ttl=300)
+def get_tester_credentials():
+    worksheet = gc.open(SHEET_NAME).worksheet("Testers")
+    records = worksheet.get_all_records()
+    return {str(r["username"]): str(r["password"]) for r in records if r.get("username")}
+
+
 # --- 3. アプリの設定 ---
 st.set_page_config(page_title="English Level Checker", layout="centered")
 st.title("🎓 英語レベル・化石化診断テスト")
@@ -61,16 +69,47 @@ if 'results' not in st.session_state:
     st.session_state.results = []
 if 'attempt' not in st.session_state:
     st.session_state.attempt = 0
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+if 'user_id' not in st.session_state:
+    st.session_state.user_id = ""
+
+# --- 3.5 被験者ログイン（ユーザー名・パスワードはTestersタブで管理） ---
+if not st.session_state.logged_in:
+    st.subheader("🔐 被験者ログイン")
+    login_username = st.text_input("ユーザー名")
+    login_password = st.text_input("パスワード", type="password")
+    if st.button("ログイン"):
+        try:
+            testers = get_tester_credentials()
+        except gspread.exceptions.WorksheetNotFound:
+            st.error("Testersシートが見つかりません。管理者に連絡してください。")
+            st.stop()
+        if login_username and testers.get(login_username) == login_password:
+            st.session_state.logged_in = True
+            st.session_state.user_id = login_username
+            st.rerun()
+        else:
+            st.error("ユーザー名またはパスワードが間違っています。")
+    st.stop()
 
 # サイドバー設定
 with st.sidebar:
     st.header("⚙️ 実験管理")
-    user_id = st.text_input("被験者ID", value="P001")
-    
+    st.write(f"ログイン中: **{st.session_state.user_id}**")
+
     # 👇 新しく「セット選択」のプルダウンを追加！
     selected_set = st.selectbox("テストセットを選択", ["Set A", "Set B", "Set C", "Set D"])
-    
+
     if st.button("テストを最初からやり直す"):
+        st.session_state.step = 0
+        st.session_state.results = []
+        st.session_state.attempt = 0
+        st.rerun()
+
+    if st.button("ログアウト"):
+        st.session_state.logged_in = False
+        st.session_state.user_id = ""
         st.session_state.step = 0
         st.session_state.results = []
         st.session_state.attempt = 0
@@ -164,10 +203,10 @@ if st.session_state.step < len(QUESTIONS):
         if submit_btn:
             with st.spinner("音声を処理・保存中..."):
                 timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-                file_name = f"{user_id}_Q{st.session_state.step+1}_{timestamp.replace('/','').replace(':','').replace(' ','_')}.wav"
+                file_name = f"{st.session_state.user_id}_Q{st.session_state.step+1}_{timestamp.replace('/','').replace(':','').replace(' ','_')}.wav"
                 audio_bytes = audio_data['bytes']
                 
-                # ① Geminiで文字起こし（音声バイトを直接渡す）
+                # ① Geminiで文字起こし（音声バイトを直接渡す。文法エラーは一切修正しない）
                 transcribe_prompt = (
                     "以下は英語学習者の発話音声です。発話された内容を一字一句そのまま書き起こしてください。"
                     "文法的な誤りや言い淀み、言い直し、フィラー(um, uhなど)も一切修正・省略せず、聞こえた通りに書き起こすこと。"
@@ -179,21 +218,33 @@ if st.session_state.step < len(QUESTIONS):
                         types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav")
                     ]
                 )
-                transcript_text = transcribe_response.text.strip()
+                raw_transcript = transcribe_response.text.strip()
+
+                # ①.5 音声認識ノイズだけをテキストベースで補正（文法エラーは残す2段目のパス）
+                cleanup_prompt = (
+                    "以下は英語学習者の発話の音声認識結果です。文脈から考えて明らかな音声認識の誤り"
+                    "（例: 'crab activity' は文脈上 'club activity' の誤認識、'play for' は 'prefer' の誤認識など）を、"
+                    "文脈から判断して正しい単語に直してください。言い淀み(uh, umなど)は除去してかまいません。"
+                    "ただし、学習者本人の文法的な誤り（3単現のsの脱落、時制の誤り、冠詞の誤りなど）は絶対に修正せず、そのまま残すこと。"
+                    "出力はクリーニング済みのテキストのみとし、説明や前置きは不要です。"
+                    f"\n\n【音声認識結果】\n{raw_transcript}"
+                )
+                cleanup_response = call_gemini(contents=cleanup_prompt)
+                cleaned_transcript = cleanup_response.text.strip()
 
                 # ② Google Cloud Storageに音声をアップロード
                 bucket = storage_client.bucket(BUCKET_NAME)
                 blob = bucket.blob(file_name)
                 blob.upload_from_string(audio_bytes, content_type='audio/wav')
 
-                # ③ スプレッドシートに記録
+                # ③ スプレッドシートに記録（生の書き起こしとクリーニング後の両方を保存し、後から検証できるようにする）
                 sheet = gc.open(SHEET_NAME).sheet1
-                sheet.append_row([timestamp, user_id, st.session_state.step + 1, current_q['q'], transcript_text])
+                sheet.append_row([timestamp, st.session_state.user_id, st.session_state.step + 1, current_q['q'], raw_transcript, cleaned_transcript])
 
                 st.session_state.results.append({
                     "question": current_q['q'],
                     "type": current_q['type'],
-                    "answer": transcript_text
+                    "answer": cleaned_transcript
                 })
                 
                 # 次のステップへ進み、録音回数をリセット
@@ -228,9 +279,18 @@ else:
         3. 名詞の境界（Nouns & Articles）
         4. 構文・語順（Syntax）
 
-        【重要】エラー率・全体平均エラー率・化石化判定の計算は一切行わないこと。
-        あなたが出力するのは、各観点の「必須文脈数」「エラー数」「具体例」のみ。
-        パーセンテージ等の計算はすべてこちら（Python側）で行う。
+        【重要・数え方のルール】
+        各観点について、いきなり個数を答えてはいけない。まず本文の最初から最後まで漏れなく確認し、
+        該当する箇所を一つずつ全て抜き出して obligatory_contexts_list に追加すること（「目立つエラー」だけを拾うのではなく、
+        正しく使えている箇所も含めて、その文法規則が適用される場面を全部リストアップする）。
+        そのうち実際に誤っていた箇所だけを error_list に追加すること。個数（件数）はこちら（Python側）でリストの長さから算出するので、
+        あなたは個数を書く必要はない。
+
+        【Self-Repair（自己修正）の除外ルール】
+        学習者が発話中に言い直した箇所は、自己モニター機能が働いている証拠であり、エラーではない。
+        obligatory_contexts_list・error_listのどちらにも含めないこと。
+        例1: "I go... I went to the park." → 正しく自己修正できているため、カウントしない。
+        例2: 単純な言い淀みや繰り返し（"I I love driving"など）、音声認識のノイズらしき箇所も、文法エラーとして数えない。
 
         【出力JSONフォーマット】
         {
@@ -238,8 +298,8 @@ else:
             "categories": [
                 {
                     "name": "時制",
-                    "obligatory_contexts": 10,
-                    "error_count": 2,
+                    "obligatory_contexts_list": ["I have been studying (Q1)", "This is a book (Q2)"],
+                    "error_list": ["go -> went (Q3)"],
                     "details": "エラーの具体例（元の発話の引用）と分析"
                 }
             ],
@@ -269,7 +329,12 @@ else:
         # JSONデータをPythonの辞書に変換
         result_data = json.loads(result_json_str)
 
-        # ★Python側でエラー率・全体平均エラー率・化石化判定を正確に計算する
+        # ★Python側で件数・エラー率・全体平均エラー率・化石化判定を正確に計算する
+        # （件数はAIの自己申告の数字ではなく、AIが書き出したリストの長さから算出する＝数え漏らし対策）
+        for cat in result_data["categories"]:
+            cat["obligatory_contexts"] = len(cat["obligatory_contexts_list"])
+            cat["error_count"] = len(cat["error_list"])
+
         total_errors = sum(cat["error_count"] for cat in result_data["categories"])
         total_contexts = sum(cat["obligatory_contexts"] for cat in result_data["categories"])
         overall_average_error_rate = (total_errors / total_contexts * 100) if total_contexts > 0 else 0
@@ -324,6 +389,6 @@ else:
         # スプレッドシートに記録
         timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
         sheet = gc.open(SHEET_NAME).sheet1
-        sheet.append_row([timestamp, user_id, "FINAL", "総合診断レポート", json.dumps(result_data, ensure_ascii=False)])
+        sheet.append_row([timestamp, st.session_state.user_id, "FINAL", "総合診断レポート", "", json.dumps(result_data, ensure_ascii=False)])
 
     st.balloons()
