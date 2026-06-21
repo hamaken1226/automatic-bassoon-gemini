@@ -188,24 +188,43 @@ if st.session_state.step < len(QUESTIONS):
         key=f"recorder_{st.session_state.step}_{st.session_state.attempt}"
     )
 
-    # 録音が終わったあとの確認画面
+    st.write("または、以前録音した音声ファイルをアップロードすることもできます（同じ発話で他のAIと結果を比較する場合など）。")
+    uploaded_file = st.file_uploader(
+        "音声ファイルをアップロード",
+        type=["wav", "mp3", "m4a", "ogg", "webm"],
+        key=f"uploader_{st.session_state.step}_{st.session_state.attempt}"
+    )
+
+    # 録音 or アップロードされたファイルのどちらかを採用する（録音が優先）
     if audio_data:
-        st.write("▼ 録音した音声を確認できます")
-        st.audio(audio_data['bytes']) 
-        
+        audio_bytes_input = audio_data["bytes"]
+        audio_mime_type = "audio/wav"
+        audio_ext = "wav"
+    elif uploaded_file is not None:
+        audio_bytes_input = uploaded_file.read()
+        audio_mime_type = uploaded_file.type or "audio/wav"
+        audio_ext = uploaded_file.name.rsplit(".", 1)[-1] if "." in uploaded_file.name else "wav"
+    else:
+        audio_bytes_input = None
+
+    # 録音/アップロードが終わったあとの確認画面
+    if audio_bytes_input:
+        st.write("▼ 音声を確認できます")
+        st.audio(audio_bytes_input)
+
         col1, col2 = st.columns(2)
         with col1:
             submit_btn = st.button("✅ この音声で提出する", type="primary", use_container_width=True)
         with col2:
-            retry_btn = st.button("🔄 録音し直す", use_container_width=True)
-            
+            retry_btn = st.button("🔄 録音し直す/選び直す", use_container_width=True)
+
         # 提出ボタンが押されたときの処理
         if submit_btn:
             with st.spinner("音声を処理・保存中..."):
                 timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-                file_name = f"{st.session_state.user_id}_Q{st.session_state.step+1}_{timestamp.replace('/','').replace(':','').replace(' ','_')}.wav"
-                audio_bytes = audio_data['bytes']
-                
+                file_name = f"{st.session_state.user_id}_Q{st.session_state.step+1}_{timestamp.replace('/','').replace(':','').replace(' ','_')}.{audio_ext}"
+                audio_bytes = audio_bytes_input
+
                 # ① Geminiで文字起こし（音声バイトを直接渡す。文法エラーは一切修正しない）
                 transcribe_prompt = (
                     "以下は英語学習者の発話音声です。発話された内容を一字一句そのまま書き起こしてください。"
@@ -215,7 +234,7 @@ if st.session_state.step < len(QUESTIONS):
                 transcribe_response = call_gemini(
                     contents=[
                         transcribe_prompt,
-                        types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav")
+                        types.Part.from_bytes(data=audio_bytes, mime_type=audio_mime_type)
                     ]
                 )
                 raw_transcript = transcribe_response.text.strip()
@@ -235,7 +254,7 @@ if st.session_state.step < len(QUESTIONS):
                 # ② Google Cloud Storageに音声をアップロード
                 bucket = storage_client.bucket(BUCKET_NAME)
                 blob = bucket.blob(file_name)
-                blob.upload_from_string(audio_bytes, content_type='audio/wav')
+                blob.upload_from_string(audio_bytes, content_type=audio_mime_type)
 
                 # ③ スプレッドシートに記録（生の書き起こしとクリーニング後の両方を保存し、後から検証できるようにする）
                 sheet = gc.open(SHEET_NAME).sheet1
