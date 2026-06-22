@@ -243,7 +243,8 @@ if st.session_state.step < len(QUESTIONS):
                     contents=[
                         transcribe_prompt,
                         types.Part.from_bytes(data=audio_bytes, mime_type=audio_mime_type)
-                    ]
+                    ],
+                    config=types.GenerateContentConfig(temperature=0.0)
                 )
                 raw_transcript = transcribe_response.text.strip()
 
@@ -256,7 +257,10 @@ if st.session_state.step < len(QUESTIONS):
                     "出力はクリーニング済みのテキストのみとし、説明や前置きは不要です。"
                     f"\n\n【音声認識結果】\n{raw_transcript}"
                 )
-                cleanup_response = call_gemini(contents=cleanup_prompt)
+                cleanup_response = call_gemini(
+                    contents=cleanup_prompt,
+                    config=types.GenerateContentConfig(temperature=0.0)
+                )
                 cleaned_transcript = cleanup_response.text.strip()
 
                 # ② Google Cloud Storageに音声をアップロード
