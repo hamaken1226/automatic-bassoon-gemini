@@ -418,6 +418,13 @@ else:
         st.markdown("---")
         st.markdown(f"### 👩‍🏫 今後の学習アドバイス\n{result_data['advice']}")
 
+        # 各問題への回答（文字起こし）の一覧
+        st.markdown("---")
+        st.markdown("### 📝 あなたの回答一覧")
+        for i, res in enumerate(st.session_state.results):
+            with st.expander(f"Q{i+1}: {res['question']}"):
+                st.write(res['answer'])
+
         # スプレッドシートに記録
         timestamp = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
         sheet = gc.open(SHEET_NAME).sheet1
