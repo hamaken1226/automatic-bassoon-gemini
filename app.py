@@ -51,7 +51,7 @@ def call_gemini(contents, config=None, max_retries=3):
             time.sleep(2 ** attempt)  # 1秒, 2秒, 4秒...と間隔を空けて再試行
 
 
-# --- 2.6 被験者の認証情報をスプレッドシート（Testersタブ）から取得 ---
+# --- 2.6 テスターの認証情報をスプレッドシート（Testersタブ）から取得 ---
 @st.cache_data(ttl=300)
 def get_tester_credentials():
     worksheet = gc.open(SHEET_NAME).worksheet("Testers")
@@ -60,8 +60,8 @@ def get_tester_credentials():
 
 
 # --- 3. アプリの設定 ---
-st.set_page_config(page_title="English Level Checker", layout="centered")
-st.title("🎓 英語レベル・化石化診断テスト")
+st.set_page_config(page_title="英語化石化診断テスト", layout="centered")
+st.title("🎓 英語化石化診断テスト")
 
 if 'step' not in st.session_state:
     st.session_state.step = 0
@@ -74,9 +74,9 @@ if 'logged_in' not in st.session_state:
 if 'user_id' not in st.session_state:
     st.session_state.user_id = ""
 
-# --- 3.5 被験者ログイン（ユーザー名・パスワードはTestersタブで管理） ---
+# --- 3.5 テスターログイン（ユーザー名・パスワードはTestersタブで管理） ---
 if not st.session_state.logged_in:
-    st.subheader("🔐 被験者ログイン")
+    st.subheader("🔐 テスターログイン")
     login_username = st.text_input("ユーザー名")
     login_password = st.text_input("パスワード", type="password")
     if st.button("ログイン"):
@@ -165,6 +165,14 @@ ALL_QUESTIONS = {
         {"type": "FREE", "q": "How do you usually relieve stress?"},
         {"type": "FREE", "q": "How do you think technology will change our lives in 10 years?"}
     ]
+}
+
+# 4つのミス観点の説明（フィードバック表示時に毎回提示する）
+CATEGORY_DESCRIPTIONS = {
+    "時制": "動詞の時制（過去形・進行形・完了形など）が、話している内容に合った正しい形で使えているかを評価します。",
+    "主語と動詞の一致": "主語の人称・単数複数に応じて、動詞の形が正しく一致しているかを評価します（例: 3人称単数のsの抜け）。",
+    "名詞の境界": "名詞が単数か複数か、冠詞（a/an/the）が必要な場面で適切に使えているかを評価します。",
+    "構文・語順": "英語として自然な文の構造・語順になっているか（語順の崩れや不自然な文構造がないか）を評価します。",
 }
 
 # 選択されたセットの10問を抽出して使用する
@@ -311,18 +319,22 @@ else:
         例1: "I go... I went to the park." → 正しく自己修正できているため、カウントしない。
         例2: 単純な言い淀みや繰り返し（"I I love driving"など）、音声認識のノイズらしき箇所も、文法エラーとして数えない。
 
+        【言語に関する重要な指示】
+        "overall_summary"・"details"・"advice"の文章は、テスター（学習者本人）に直接渡すフィードバックです。
+        必ず**日本語**で書くこと（英語で書いてはいけない）。obligatory_contexts_list・error_listの引用部分は元の発話のまま英語でよい。
+
         【出力JSONフォーマット】
         {
-            "overall_summary": "学習者のスピーキング傾向についての総評（2〜3文）",
+            "overall_summary": "学習者のスピーキング傾向についての総評（2〜3文、日本語）",
             "categories": [
                 {
                     "name": "時制",
                     "obligatory_contexts_list": ["I have been studying (Q1)", "This is a book (Q2)"],
                     "error_list": ["go -> went (Q3)"],
-                    "details": "エラーの具体例（元の発話の引用）と分析"
+                    "details": "エラーの具体例（元の発話の引用）と分析（日本語で記述）"
                 }
             ],
-            "advice": "今後の学習アドバイス"
+            "advice": "今後の学習アドバイス（日本語）"
         }
 
         【対象発話ログ】
@@ -361,8 +373,8 @@ else:
         for cat in result_data["categories"]:
             cat_rate = (cat["error_count"] / cat["obligatory_contexts"] * 100) if cat["obligatory_contexts"] > 0 else 0
             cat["error_rate"] = cat_rate
-            # 化石化の定義：全体平均が40%以下 かつ その観点のエラー率が全体平均+30ポイント以上
-            cat["is_fossilized"] = bool(overall_average_error_rate <= 40.0 and cat_rate >= overall_average_error_rate + 30.0)
+            # 化石化の定義：その観点のエラー率が全体平均+15ポイント以上（絶対値ゲートは撤廃）
+            cat["is_fossilized"] = bool(cat_rate >= overall_average_error_rate + 15.0)
 
         result_data["overall_average_error_rate"] = overall_average_error_rate
 
@@ -399,6 +411,7 @@ else:
             # 化石化フラグが立っていたら警告アイコンをつける
             status_icon = "⚠️ **【化石化の兆候あり】**" if cat['is_fossilized'] else "✅"
             st.markdown(f"#### {status_icon} {cat['name']} (エラー率: {cat['error_rate']:.1f}%)")
+            st.caption(CATEGORY_DESCRIPTIONS.get(cat['name'], ""))
             st.markdown(f"- 必須文脈数: {cat['obligatory_contexts']} / エラー数: {cat['error_count']}")
             st.markdown(f"- **分析:** {cat['details']}")
 
