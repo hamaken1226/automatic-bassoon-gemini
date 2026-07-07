@@ -5,15 +5,29 @@ import json
 import gspread
 from google.oauth2 import service_account
 
-st.set_page_config(page_title="あなたの結果", page_icon="📊", layout="wide")
-st.title("📊 あなたの診断結果")
+st.set_page_config(page_title="管理者ダッシュボード", page_icon="🔐", layout="wide")
+st.title("🔐 管理者ダッシュボード")
 
-# テスターとしてログインしていない場合はトップへ誘導
-if "user_id" not in st.session_state or not st.session_state.user_id:
-    st.warning("先にトップページからログインしてください。")
+# --- 管理者認証 ---
+if "admin_authenticated" not in st.session_state:
+    st.session_state.admin_authenticated = False
+
+if not st.session_state.admin_authenticated:
+    st.markdown("### 管理者ログイン")
+    st.write("このページは管理者専用です。パスワードを入力してください。")
+    pwd = st.text_input("管理者パスワード", type="password")
+    if st.button("ログイン"):
+        if pwd == st.secrets.get("admin_password", ""):
+            st.session_state.admin_authenticated = True
+            st.rerun()
+        else:
+            st.error("パスワードが違います")
     st.stop()
 
-user_id = st.session_state.user_id
+if st.sidebar.button("🚪 ログアウト"):
+    st.session_state.admin_authenticated = False
+    st.rerun()
+st.sidebar.success("✅ 管理者としてログイン中")
 
 # --- スプレッドシートへの接続 ---
 gcp_info = dict(st.secrets["gcp_service_account"])
@@ -30,36 +44,26 @@ except Exception:
     st.error("スプレッドシートの読み込みに失敗しました。")
     st.stop()
 
-with st.spinner("過去のテスト結果を取得中..."):
+with st.spinner("全テスターのデータを集計中..."):
     rows = sheet.get_all_values()
-    user_records = []
+    dashboard_data = []
     for row in rows:
-        if len(row) >= 6 and row[2] == "FINAL" and row[1] == user_id:
+        if len(row) >= 6 and row[2] == "FINAL":
             try:
                 data = json.loads(row[5])
-                user_records.append({"timestamp": row[0], "data": data})
+                dashboard_data.append({
+                    "timestamp": row[0],
+                    "user_id": row[1],
+                    "data": data
+                })
             except Exception:
                 continue
 
-if not user_records:
-    st.info("まだテスト結果がありません。テストを完了させると結果が表示されます。")
+if not dashboard_data:
+    st.info("まだテスト結果がありません。")
     st.stop()
 
-st.markdown(f"### 👤 テスター: {user_id}（テスト実施回数: {len(user_records)}回）")
-
-flat_data = []
-for rec in user_records:
-    for cat in rec["data"]["categories"]:
-        flat_data.append({
-            "テスト日時": rec["timestamp"],
-            "観点": cat["name"],
-            "エラー率": float(cat["error_rate"]),
-            "化石化判定": cat["is_fossilized"]
-        })
-
-df = pd.DataFrame(flat_data)
-
-# CEFR判定
+# CEFR判定ヘルパー
 CEFR_DESCS = {
     "C2": ("C2 (熟練者レベル)", "#9C27B0", "驚異的な正確性です。母語話者と同等の文法コントロール力を持ち、いかなる負荷がかかっても化石化のエラーを起こしません。まさにマスターレベルです。"),
     "C1": ("C1 (上級・プロフェッショナル)", "#673AB7", "極めて高い正確性を誇ります。化石化の兆候は完全に払拭されており、複雑な文章でも文法的なミスを犯すことはほぼありません。"),
@@ -82,6 +86,60 @@ def get_cefr_key(error_rate, fossilization_count):
         return "A2"
     else:
         return "A1"
+
+# --- 全テスター一覧 ---
+st.markdown("## 👥 全テスター 結果一覧")
+
+user_ids = sorted(set([d["user_id"] for d in dashboard_data]))
+
+summary_rows = []
+for uid in user_ids:
+    records = [d for d in dashboard_data if d["user_id"] == uid]
+    flat = []
+    for rec in records:
+        for cat in rec["data"]["categories"]:
+            flat.append({
+                "観点": cat["name"],
+                "エラー率": float(cat["error_rate"]),
+                "化石化判定": cat["is_fossilized"]
+            })
+    df_u = pd.DataFrame(flat)
+    avg_error = df_u["エラー率"].mean()
+    fossil_count = int(df_u[df_u["化石化判定"] == True].shape[0])
+    fossil_cats = df_u[df_u["化石化判定"] == True]["観点"].unique().tolist()
+    cefr_key = get_cefr_key(avg_error, fossil_count)
+    summary_rows.append({
+        "テスターID": uid,
+        "テスト回数": len(records),
+        "平均エラー率": f"{avg_error:.1f}%",
+        "化石化検知回数": fossil_count,
+        "化石化カテゴリ": "、".join(fossil_cats) if fossil_cats else "なし",
+        "推定CEFR": cefr_key,
+        "最終受験日時": sorted([r["timestamp"] for r in records])[-1],
+    })
+
+df_summary = pd.DataFrame(summary_rows)
+st.dataframe(df_summary, use_container_width=True, hide_index=True)
+
+# --- テスター別詳細 ---
+st.markdown("---")
+st.markdown("## 🔍 テスター別 詳細分析")
+selected_user = st.sidebar.selectbox("👤 分析するテスターを選択", user_ids)
+
+user_records = [d for d in dashboard_data if d["user_id"] == selected_user]
+st.markdown(f"### 👤 テスター: {selected_user}（テスト実施回数: {len(user_records)}回）")
+
+flat_data = []
+for rec in user_records:
+    for cat in rec["data"]["categories"]:
+        flat_data.append({
+            "テスト日時": rec["timestamp"],
+            "観点": cat["name"],
+            "エラー率": float(cat["error_rate"]),
+            "化石化判定": cat["is_fossilized"]
+        })
+
+df = pd.DataFrame(flat_data)
 
 overall_error_rate = df["エラー率"].mean()
 total_fossilizations = df[df["化石化判定"] == True].shape[0]
